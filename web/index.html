@@ -6,7 +6,6 @@
     <meta name="description" content="AI-powered analytics assistant for Tableau workbooks and dashboards." />
     <meta name="theme-color" content="#0a1628" />
     <title>Tableau MCP · Analytics Assistant</title>
-    <script src="https://extensions.tableauusercontent.com/extensions/tableau-extensions-api/tableau.extensions.1.latest.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -16,7 +15,11 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231976d2'/%3E%3Cpath d='M8 22V10h3v12H8zm5-8v8h3v-8h-3zm5 4v4h3v-4h-3zm5-6v10h3V12h-3z' fill='white'/%3E%3C/svg%3E" />
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div style="font-family: Inter, system-ui, sans-serif; padding: 24px; color: #334155;">
+        Loading Tableau MCP…
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
