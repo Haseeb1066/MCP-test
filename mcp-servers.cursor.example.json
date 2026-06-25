@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "tableau": {
+      "command": "node",
+      "args": ["build/index.js"],
+      "env": {
+        "TRANSPORT": "stdio",
+        "SERVER": "https://your-tableau-server",
+        "SITE_NAME": "your-site-content-url",
+        "PAT_NAME": "your-pat-name",
+        "PAT_VALUE": "your-pat-secret",
+        "NODE_TLS_REJECT_UNAUTHORIZED": "0"
+      }
+    }
+  }
+}
