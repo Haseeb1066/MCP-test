@@ -7,6 +7,8 @@ import {
   type WorkbookSummary,
 } from "./tableauExtension";
 import { ToolSteps, type ToolStep, type TurnTiming } from "./ToolSteps";
+import { APP_BUILD_ID, debugLog } from "./debugLog";
+import { isTableauHost } from "./config";
 
 type Role = "user" | "assistant";
 
@@ -81,6 +83,16 @@ export function App() {
   const selectedWorkbook = extensionContext?.workbook ?? null;
 
   useEffect(() => {
+    // #region agent log
+    debugLog("App.tsx:mount", "Extension app mounted", {
+      buildId: APP_BUILD_ID,
+      hasDropdownUi: false,
+      isTableauHost: isTableauHost(),
+    }, "B");
+    // #endregion
+  }, []);
+
+  useEffect(() => {
     fetch(apiUrl("/api/health"))
       .then(async (r) => {
         try {
@@ -112,13 +124,24 @@ export function App() {
     loadExtensionContext()
       .then((ctx) => {
         if (!cancelled) {
+          // #region agent log
+          debugLog("App.tsx:workbook", "Workbook resolved", {
+            workbookId: ctx.workbook.id,
+            source: ctx.source,
+            dashboard: ctx.dashboardName,
+          }, "C");
+          // #endregion
           setExtensionContext(ctx);
           setWorkbookError(null);
         }
       })
       .catch((e) => {
         if (!cancelled) {
-          setWorkbookError(e instanceof Error ? e.message : String(e));
+          const msg = e instanceof Error ? e.message : String(e);
+          // #region agent log
+          debugLog("App.tsx:workbook-error", "Workbook resolve failed", { error: msg }, "D");
+          // #endregion
+          setWorkbookError(msg);
           setExtensionContext(null);
         }
       })
@@ -439,6 +462,10 @@ export function App() {
           </div>
           <p className="composer-hint">
             <kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for new line
+            <span className="build-stamp" title="UI build identifier">
+              {" "}
+              · build {APP_BUILD_ID}
+            </span>
           </p>
         </footer>
       </div>

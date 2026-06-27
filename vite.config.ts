@@ -5,9 +5,24 @@ import { defineConfig } from "vite";
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
 const apiPort = process.env.API_PORT ?? "8787";
+const APP_BUILD_ID = "ext-only-v3";
 
 export default defineConfig({
-  plugins: [react()],
+  define: {
+    __APP_BUILD_ID__: JSON.stringify(APP_BUILD_ID),
+  },
+  plugins: [
+    react(),
+    {
+      name: "inject-build-id",
+      transformIndexHtml(html) {
+        return html.replace(
+          "</head>",
+          `<meta name="app-build-id" content="${APP_BUILD_ID}" /></head>`
+        );
+      },
+    },
+  ],
   root: "web",
   server: {
     port: 5173,

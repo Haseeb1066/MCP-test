@@ -817,6 +817,12 @@ body {
   font-size: 0.68rem;
 }
 
+.build-stamp {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-family: var(--mono);
+}
+
 .composer-error {
   margin: 0;
   padding: 0.5rem 1.5rem 0;

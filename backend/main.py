@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import backend.platform_fix  # noqa: F401 — Windows subprocess / event loop
 
+import json
+import re
+import time
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -237,15 +239,95 @@ async def api_chat(body: ChatRequest) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+DEBUG_LOG_PATH = Path(__file__).resolve().parents[1] / ".cursor" / "debug-766da3.log"
+
+
+def _agent_log(
+    location: str,
+    message: str,
+    data: dict[str, Any],
+    hypothesis_id: str = "E",
+) -> None:
+    payload = {
+        "sessionId": "766da3",
+        "runId": "pre-fix",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except OSError:
+        pass
+
+
+def _index_script_hash() -> str | None:
+    try:
+        html = (WEB_DIST / "index.html").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r"/assets/index-([^.]+)\.js", html)
+    return match.group(1) if match else None
+
+
+def _index_build_id() -> str | None:
+    try:
+        html = (WEB_DIST / "index.html").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r'name="app-build-id" content="([^"]+)"', html)
+    return match.group(1) if match else None
+
+
+def _spa_html_response() -> FileResponse:
+    response = FileResponse(WEB_DIST / "index.html")
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+@app.get("/api/version")
+async def app_version():
+    return {
+        "buildId": _index_build_id(),
+        "scriptHash": _index_script_hash(),
+    }
+
+
 # Production: serve built React app
 if WEB_DIST.is_dir():
     assets = WEB_DIST / "assets"
-    if assets.is_dir():
-        app.mount("/assets", StaticFiles(directory=assets), name="assets")
+
+    @app.get("/assets/{asset_path:path}")
+    async def spa_assets(asset_path: str):
+        file_path = assets / asset_path
+        if not file_path.is_file():
+            raise HTTPException(status_code=404)
+        response = FileResponse(file_path)
+        if re.search(r"index-[A-Za-z0-9_-]+\.(js|css)$", asset_path):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
 
     @app.get("/")
-    async def spa_index():
-        return FileResponse(WEB_DIST / "index.html")
+    async def spa_index(request: Request):
+        # #region agent log
+        _agent_log(
+            "main.py:spa_index",
+            "Serving index.html",
+            {
+                "scriptHash": _index_script_hash(),
+                "buildId": _index_build_id(),
+                "referer": request.headers.get("referer"),
+                "userAgent": (request.headers.get("user-agent") or "")[:120],
+            },
+            "E",
+        )
+        # #endregion
+        return _spa_html_response()
 
     @app.get("/{full_path:path}")
     async def spa_fallback(full_path: str):
@@ -254,4 +336,4 @@ if WEB_DIST.is_dir():
         file_path = WEB_DIST / full_path
         if file_path.is_file():
             return FileResponse(file_path)
-        return FileResponse(WEB_DIST / "index.html")
+        return _spa_html_response()
