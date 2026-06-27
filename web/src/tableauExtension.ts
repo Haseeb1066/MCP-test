@@ -1,4 +1,4 @@
-import { apiUrl } from "./config";
+import { apiUrl, isTableauHost } from "./config";
 import { readJson } from "./api";
 
 export type WorkbookSummary = {
@@ -13,9 +13,10 @@ export type ExtensionContext = {
   workbook: WorkbookSummary;
   dashboardName: string;
   worksheetNames: string[];
+  source: "settings" | "query" | "tableau-name";
 };
 
-const WORKBOOK_STORAGE_KEY = "tableau-selected-workbook-id";
+const SETTINGS_WORKBOOK_ID = "workbookId";
 
 function sanitizeParam(value: string | null): string | null {
   if (!value) return null;
@@ -38,14 +39,6 @@ function testParamsFromQuery(): {
   };
 }
 
-function storedWorkbookId(): string | null {
-  try {
-    return sanitizeParam(localStorage.getItem(WORKBOOK_STORAGE_KEY));
-  } catch {
-    return null;
-  }
-}
-
 async function resolveWorkbook(options: {
   workbookId?: string;
   name?: string;
@@ -60,60 +53,125 @@ async function resolveWorkbook(options: {
   const res = await fetch(apiUrl(`/api/workbooks/resolve?${qs}`));
   const data = await readJson<{ workbook: WorkbookSummary; detail?: string }>(res);
   if (!data.workbook?.id) {
-    const hint = data.detail ?? `Could not resolve workbook on the server.`;
-    throw new Error(hint);
+    throw new Error(data.detail ?? "Could not resolve workbook on the server.");
   }
   return data.workbook;
 }
 
-/**
- * Initialize Tableau Extensions API and resolve the current workbook to MCP workbookId (LUID).
- * For local testing without Tableau:
- *   ?extension=1&workbookId=ed6bafd2-...   (same id as dropdown selection)
- *   ?extension=1&workbookName=Sales%20(Sales)
- *   ?extension=1&contentUrl=Sales
- *   ?extension=1   (uses last workbook picked in the dropdown, from localStorage)
- */
-export async function loadExtensionContext(): Promise<ExtensionContext> {
-  const test = testParamsFromQuery();
+async function waitForTableauApi(timeoutMs = 20_000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (window.tableau?.extensions) return window.tableau.extensions;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return null;
+}
 
-  if (window.tableau?.extensions) {
-    await window.tableau.extensions.initializeAsync();
-    const dashboard = window.tableau.extensions.dashboardContent.dashboard;
-    const workbookName = dashboard.workbook.name;
-    const workbook = await resolveWorkbook({ name: workbookName });
-    return {
-      workbook,
-      dashboardName: dashboard.name,
-      worksheetNames: dashboard.worksheets.map((w) => w.name),
-    };
+async function persistWorkbookId(settings: TableauSettings, workbookId: string): Promise<void> {
+  const current = settings.get(SETTINGS_WORKBOOK_ID);
+  if (current === workbookId) return;
+  settings.set(SETTINGS_WORKBOOK_ID, workbookId);
+  await settings.saveAsync();
+}
+
+async function loadFromTableauHost(test: ReturnType<typeof testParamsFromQuery>): Promise<ExtensionContext> {
+  const api = await waitForTableauApi();
+  if (!api) {
+    if (test.workbookId) {
+      const workbook = await resolveWorkbook({ workbookId: test.workbookId });
+      return { workbook, dashboardName: "Dashboard", worksheetNames: [], source: "query" };
+    }
+    throw new Error(
+      "Tableau Extensions API did not load. Reload the dashboard or check the extension URL is allowlisted."
+    );
+  }
+
+  await api.initializeAsync();
+  await api.settings.initializeAsync();
+  const dashboard = api.dashboardContent.dashboard;
+  const settings = api.settings;
+
+  const storedId = sanitizeParam(settings.get(SETTINGS_WORKBOOK_ID) ?? null);
+  if (storedId) {
+    try {
+      const workbook = await resolveWorkbook({ workbookId: storedId });
+      return {
+        workbook,
+        dashboardName: dashboard.name,
+        worksheetNames: dashboard.worksheets.map((w) => w.name),
+        source: "settings",
+      };
+    } catch {
+      /* stored id stale — resolve again from Tableau context */
+    }
   }
 
   if (test.workbookId) {
     const workbook = await resolveWorkbook({ workbookId: test.workbookId });
-    return { workbook, dashboardName: "Test dashboard", worksheetNames: [] };
+    await persistWorkbookId(settings, workbook.id);
+    return {
+      workbook,
+      dashboardName: dashboard.name,
+      worksheetNames: dashboard.worksheets.map((w) => w.name),
+      source: "query",
+    };
   }
 
   if (test.contentUrl) {
     const workbook = await resolveWorkbook({ contentUrl: test.contentUrl });
-    return { workbook, dashboardName: "Test dashboard", worksheetNames: [] };
+    await persistWorkbookId(settings, workbook.id);
+    return {
+      workbook,
+      dashboardName: dashboard.name,
+      worksheetNames: dashboard.worksheets.map((w) => w.name),
+      source: "query",
+    };
   }
 
+  const workbookName = dashboard.workbook.name;
+  const workbook = await resolveWorkbook({
+    name: workbookName,
+    projectName: test.projectName ?? undefined,
+  });
+  await persistWorkbookId(settings, workbook.id);
+
+  return {
+    workbook,
+    dashboardName: dashboard.name,
+    worksheetNames: dashboard.worksheets.map((w) => w.name),
+    source: "tableau-name",
+  };
+}
+
+async function loadFromLocalTest(test: ReturnType<typeof testParamsFromQuery>): Promise<ExtensionContext> {
+  if (test.workbookId) {
+    const workbook = await resolveWorkbook({ workbookId: test.workbookId });
+    return { workbook, dashboardName: "Test dashboard", worksheetNames: [], source: "query" };
+  }
+  if (test.contentUrl) {
+    const workbook = await resolveWorkbook({ contentUrl: test.contentUrl });
+    return { workbook, dashboardName: "Test dashboard", worksheetNames: [], source: "query" };
+  }
   if (test.workbookName) {
     const workbook = await resolveWorkbook({
       name: test.workbookName,
       projectName: test.projectName ?? undefined,
     });
-    return { workbook, dashboardName: "Test dashboard", worksheetNames: [] };
+    return { workbook, dashboardName: "Test dashboard", worksheetNames: [], source: "tableau-name" };
   }
-
-  const savedId = storedWorkbookId();
-  if (savedId) {
-    const workbook = await resolveWorkbook({ workbookId: savedId });
-    return { workbook, dashboardName: "Test dashboard", worksheetNames: [] };
-  }
-
   throw new Error(
-    "Tableau Extensions API not available. Pick a workbook in the dropdown first, then open ?extension=1, or add workbookId= / contentUrl= / workbookName=Sales%20(Sales)."
+    "Open this app from a Tableau dashboard extension, or add ?workbookId=YOUR-LUID for local testing."
   );
+}
+
+/**
+ * Resolve the current dashboard workbook to MCP workbookId (LUID).
+ * In Tableau: uses saved extension settings first, then auto-resolves and stores the id.
+ */
+export async function loadExtensionContext(): Promise<ExtensionContext> {
+  const test = testParamsFromQuery();
+  if (isTableauHost()) {
+    return loadFromTableauHost(test);
+  }
+  return loadFromLocalTest(test);
 }

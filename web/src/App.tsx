@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { readJson } from "./api";
-import { apiUrl, isExtensionContext } from "./config";
+import { apiUrl } from "./config";
 import {
   loadExtensionContext,
   type ExtensionContext,
@@ -16,13 +16,6 @@ interface ChatMessage {
   steps?: ToolStep[];
   timing?: TurnTiming;
 }
-
-const WORKBOOK_STORAGE_KEY = "tableau-selected-workbook-id";
-
-const DATASOURCE_STARTERS = [
-  "What published datasources can I access?",
-  "List fields for CustomerChurn, then show churn by month in 2026",
-] as const;
 
 const CAPABILITIES = [
   { icon: "📊", label: "Sheet data", desc: "Pull view data via MCP" },
@@ -65,125 +58,27 @@ function BrandMark() {
   );
 }
 
-function StatusPill({
-  health,
-  extensionLoading,
-  extensionMode,
-  selectedWorkbook,
-  workbooksCount,
-  isWorkbookMode,
-}: {
-  health: {
-    ok: boolean;
-    healthError?: string;
-    chatMode?: "workbook" | "datasource";
-    tableauSignInOk?: boolean;
-    tableauHint?: string;
-    hasOpenAi?: boolean;
-  } | null;
-  extensionLoading: boolean;
-  extensionMode: boolean;
-  selectedWorkbook: WorkbookSummary | null;
-  workbooksCount: number;
-  isWorkbookMode: boolean;
-}) {
-  if (health === null) {
-    return (
-      <div className="status-pill status-pill--loading">
-        <span className="status-dot" />
-        Checking connection…
-      </div>
-    );
-  }
-
-  if (health.healthError) {
-    return (
-      <div className="status-pill status-pill--error">
-        <span className="status-dot" />
-        {health.healthError}
-      </div>
-    );
-  }
-
-  if (extensionLoading) {
-    return (
-      <div className="status-pill status-pill--loading">
-        <span className="status-dot" />
-        Connecting to workbook…
-      </div>
-    );
-  }
-
-  if (!health.ok) {
-    const msg =
-      health.tableauSignInOk === false && health.tableauHint
-        ? health.tableauHint
-        : !health.hasOpenAi
-          ? "Set OPENAI_API_KEY in .env"
-          : "Set Tableau PAT in .env and restart";
-    return (
-      <div className="status-pill status-pill--error">
-        <span className="status-dot" />
-        {msg}
-      </div>
-    );
-  }
-
-  const mode = health.chatMode === "datasource" ? "Datasource" : "Workbook";
-  const extra =
-    extensionMode && selectedWorkbook
-      ? displayName(selectedWorkbook.name)
-      : !extensionMode && isWorkbookMode && workbooksCount
-        ? `${workbooksCount} workbooks`
-        : null;
-
-  return (
-    <div className="status-pill status-pill--ok">
-      <span className="status-dot" />
-      Connected · {mode} mode{extra ? ` · ${extra}` : ""}
-    </div>
-  );
-}
-
 export function App() {
-  const extensionMode = isExtensionContext();
-
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [health, setHealth] = useState<
-    {
-      ok: boolean;
-      healthError?: string;
-      hasOpenAi?: boolean;
-      hasTableau?: boolean;
-      chatMode?: "workbook" | "datasource";
-      tableauSignInOk?: boolean;
-      tableauHint?: string;
-    } | null
-  >(null);
-  const [workbooks, setWorkbooks] = useState<WorkbookSummary[]>([]);
-  const [workbooksLoading, setWorkbooksLoading] = useState(false);
-  const [workbooksError, setWorkbooksError] = useState<string | null>(null);
-  const [selectedWorkbookId, setSelectedWorkbookId] = useState<string>(() => {
-    if (isExtensionContext()) return "";
-    try {
-      return localStorage.getItem(WORKBOOK_STORAGE_KEY) ?? "";
-    } catch {
-      return "";
-    }
-  });
+  const [health, setHealth] = useState<{
+    ok: boolean;
+    healthError?: string;
+    hasOpenAi?: boolean;
+    chatMode?: "workbook" | "datasource";
+    tableauSignInOk?: boolean;
+    tableauHint?: string;
+  } | null>(null);
   const [extensionContext, setExtensionContext] = useState<ExtensionContext | null>(null);
-  const [extensionLoading, setExtensionLoading] = useState(extensionMode);
-  const [extensionError, setExtensionError] = useState<string | null>(null);
+  const [workbookLoading, setWorkbookLoading] = useState(true);
+  const [workbookError, setWorkbookError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isWorkbookMode = health?.chatMode !== "datasource";
-  const selectedWorkbook = extensionMode
-    ? extensionContext?.workbook ?? null
-    : workbooks.find((w) => w.id === selectedWorkbookId) ?? null;
+  const selectedWorkbook = extensionContext?.workbook ?? null;
 
   useEffect(() => {
     fetch(apiUrl("/api/health"))
@@ -192,7 +87,6 @@ export function App() {
           return await readJson<{
             ok: boolean;
             hasOpenAi?: boolean;
-            hasTableau?: boolean;
             chatMode?: "workbook" | "datasource";
             tableauSignInOk?: boolean;
             tableauHint?: string;
@@ -206,75 +100,36 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!extensionMode || !health?.ok || !isWorkbookMode) {
-      if (!extensionMode) setExtensionLoading(false);
+    if (!health?.ok || !isWorkbookMode) {
+      if (!isWorkbookMode) setWorkbookLoading(false);
       return;
     }
 
     let cancelled = false;
-    setExtensionLoading(true);
-    setExtensionError(null);
+    setWorkbookLoading(true);
+    setWorkbookError(null);
 
     loadExtensionContext()
       .then((ctx) => {
         if (!cancelled) {
           setExtensionContext(ctx);
-          setExtensionError(null);
+          setWorkbookError(null);
         }
       })
       .catch((e) => {
         if (!cancelled) {
-          const msg = e instanceof Error ? e.message : String(e);
-          setExtensionError(msg);
+          setWorkbookError(e instanceof Error ? e.message : String(e));
           setExtensionContext(null);
         }
       })
       .finally(() => {
-        if (!cancelled) setExtensionLoading(false);
+        if (!cancelled) setWorkbookLoading(false);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [extensionMode, health?.ok, isWorkbookMode]);
-
-  const loadWorkbooks = useCallback(async () => {
-    setWorkbooksLoading(true);
-    setWorkbooksError(null);
-    try {
-      const res = await fetch(apiUrl("/api/workbooks"));
-      const data = await readJson<{ workbooks?: WorkbookSummary[] }>(res);
-      const list = data.workbooks ?? [];
-      setWorkbooks(list);
-      if (selectedWorkbookId && !list.some((w) => w.id === selectedWorkbookId)) {
-        setSelectedWorkbookId("");
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setWorkbooksError(msg);
-      setWorkbooks([]);
-    } finally {
-      setWorkbooksLoading(false);
-    }
-  }, [selectedWorkbookId]);
-
-  useEffect(() => {
-    if (extensionMode || !health?.ok || !isWorkbookMode) return;
-    void loadWorkbooks();
-  }, [extensionMode, health?.ok, isWorkbookMode, loadWorkbooks]);
-
-  useEffect(() => {
-    if (extensionMode) return;
-    try {
-      if (selectedWorkbookId) {
-        localStorage.setItem(WORKBOOK_STORAGE_KEY, selectedWorkbookId);
-      } else {
-        localStorage.removeItem(WORKBOOK_STORAGE_KEY);
-      }
-    } catch {
-      /* ignore */
-    }
-  }, [extensionMode, selectedWorkbookId]);
+  }, [health?.ok, isWorkbookMode]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -285,11 +140,7 @@ export function App() {
       const trimmed = text.trim();
       if (!trimmed || loading) return;
       if (isWorkbookMode && !selectedWorkbook) {
-        setError(
-          extensionMode
-            ? "Waiting for workbook context from Tableau…"
-            : "Select a workbook from the dropdown first."
-        );
+        setError("Waiting for workbook ID from this dashboard…");
         return;
       }
 
@@ -306,7 +157,7 @@ export function App() {
           body: JSON.stringify({
             messages: next.map((m) => ({ role: m.role, content: m.content })),
             ...(selectedWorkbook ? { selectedWorkbook } : {}),
-            ...(extensionMode ? { extensionMode: true } : {}),
+            extensionMode: true,
           }),
         });
         const data = await readJson<{
@@ -334,7 +185,7 @@ export function App() {
         textareaRef.current?.focus();
       }
     },
-    [loading, messages, isWorkbookMode, selectedWorkbook, extensionMode]
+    [loading, messages, isWorkbookMode, selectedWorkbook]
   );
 
   const send = useCallback(() => void sendMessage(input), [input, sendMessage]);
@@ -352,38 +203,45 @@ export function App() {
     }
   };
 
-  const starters =
-    isWorkbookMode && selectedWorkbook
-      ? workbookStarters(selectedWorkbook.name)
-      : isWorkbookMode
-        ? []
-        : DATASOURCE_STARTERS;
-
+  const starters = selectedWorkbook ? workbookStarters(selectedWorkbook.name) : [];
   const workbookReady = !isWorkbookMode || !!selectedWorkbook;
-  const canSend = !loading && !!input.trim() && health?.ok && workbookReady && !extensionLoading;
+  const canSend = !loading && !!input.trim() && health?.ok && workbookReady && !workbookLoading;
 
-  const modeBadge = extensionMode
-    ? "Extension"
-    : health?.chatMode === "datasource"
-      ? "Datasource"
-      : "Workbook";
+  const statusMessage = (() => {
+    if (health === null) return "Checking connection…";
+    if (health.healthError) return health.healthError;
+    if (workbookLoading) return "Resolving workbook ID…";
+    if (!health.ok) {
+      if (health.tableauSignInOk === false && health.tableauHint) return health.tableauHint;
+      if (!health.hasOpenAi) return "Set OPENAI_API_KEY on the server";
+      return "Set Tableau PAT on the server";
+    }
+    if (selectedWorkbook) {
+      return `Connected · ${displayName(selectedWorkbook.name)}`;
+    }
+    return "Connected";
+  })();
+
+  const statusClass =
+    health === null || workbookLoading
+      ? "status-pill--loading"
+      : health?.healthError || workbookError || !health?.ok
+        ? "status-pill--error"
+        : "status-pill--ok";
 
   return (
-    <div className={`app-shell${extensionMode ? " app-shell--extension" : ""}`}>
-      <div className={`app${extensionMode ? " app-extension" : ""}`}>
+    <div className="app-shell app-shell--extension">
+      <div className="app app-extension">
         <header className="app-header">
           <div className="header-top">
             <div className="brand">
               <BrandMark />
               <div className="brand-text">
                 <h1>Tableau MCP</h1>
-                <p className="brand-tagline">Analytics Assistant</p>
+                <p className="brand-tagline">Dashboard Extension</p>
               </div>
             </div>
             <div className="header-actions">
-              <span className="mode-badge" title={`${modeBadge} mode`}>
-                {modeBadge}
-              </span>
               {messages.length > 0 && (
                 <button type="button" className="btn-ghost" onClick={clearChat} disabled={loading}>
                   Clear chat
@@ -393,23 +251,19 @@ export function App() {
           </div>
 
           <p className="header-subtitle">
-            {extensionMode
-              ? "Ask questions about this workbook — scoped automatically from the dashboard."
-              : health?.chatMode === "datasource"
-                ? "Query published datasources with natural language."
-                : "Select a workbook, then explore sheets, views, and data with AI."}
+            Ask questions about this workbook — workbook ID is detected from the dashboard.
           </p>
 
-          {extensionMode && isWorkbookMode && health?.ok && (
+          {isWorkbookMode && health?.ok && (
             <div className="workbook-card workbook-card--extension">
-              {extensionLoading ? (
+              {workbookLoading ? (
                 <div className="workbook-card-loading">
                   <span className="spinner" />
-                  Resolving workbook from Tableau…
+                  Resolving workbook ID from this dashboard…
                 </div>
-              ) : extensionError ? (
+              ) : workbookError ? (
                 <p className="workbook-card-error" role="alert">
-                  {extensionError}
+                  {workbookError}
                 </p>
               ) : selectedWorkbook ? (
                 <div className="workbook-card-body">
@@ -418,6 +272,10 @@ export function App() {
                   </span>
                   <div>
                     <div className="workbook-card-title">{workbookLabel(selectedWorkbook)}</div>
+                    <div className="workbook-card-meta">
+                      Workbook ID · {selectedWorkbook.id}
+                      {extensionContext?.source === "settings" ? " · saved in extension" : ""}
+                    </div>
                     {extensionContext?.dashboardName && (
                       <div className="workbook-card-meta">
                         Dashboard · {extensionContext.dashboardName}
@@ -431,80 +289,23 @@ export function App() {
             </div>
           )}
 
-          {!extensionMode && isWorkbookMode && health?.ok && (
-            <div className="workbook-card">
-              <label className="workbook-card-label" htmlFor="workbook-select">
-                Active workbook
-              </label>
-              <div className="workbook-picker-row">
-                <select
-                  id="workbook-select"
-                  className="workbook-select"
-                  value={selectedWorkbookId}
-                  onChange={(e) => {
-                    setSelectedWorkbookId(e.target.value);
-                    setError(null);
-                  }}
-                  disabled={workbooksLoading || loading}
-                >
-                  <option value="">
-                    {workbooksLoading ? "Loading workbooks…" : "Choose a workbook to analyze…"}
-                  </option>
-                  {workbooks.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.projectName ? `${displayName(w.name)} (${w.projectName})` : displayName(w.name)}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="btn-icon"
-                  onClick={() => void loadWorkbooks()}
-                  disabled={workbooksLoading || loading}
-                  title="Refresh workbook list"
-                  aria-label="Refresh workbook list"
-                >
-                  <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                    <path
-                      fillRule="evenodd"
-                      d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                </button>
-              </div>
-              {workbooksError && <p className="workbook-card-error">{workbooksError}</p>}
-              {selectedWorkbook && (
-                <p className="workbook-card-hint">
-                  Ready to analyze <strong>{workbookLabel(selectedWorkbook)}</strong>
-                </p>
-              )}
-            </div>
-          )}
-
-          <StatusPill
-            health={health}
-            extensionLoading={extensionLoading}
-            extensionMode={extensionMode}
-            selectedWorkbook={selectedWorkbook}
-            workbooksCount={workbooks.length}
-            isWorkbookMode={isWorkbookMode}
-          />
+          <div className={`status-pill ${statusClass}`}>
+            <span className="status-dot" />
+            {statusMessage}
+          </div>
         </header>
 
         <main className="messages" role="log" aria-live="polite" aria-relevant="additions">
           {messages.length === 0 && !loading && (
             <div className="empty-state">
-              {isWorkbookMode && !selectedWorkbook && health?.ok && !extensionLoading ? (
+              {isWorkbookMode && !selectedWorkbook && health?.ok && !workbookLoading ? (
                 <div className="empty-state-card">
                   <div className="empty-state-icon">📂</div>
-                  <h2>Select a workbook</h2>
+                  <h2>Workbook not ready</h2>
                   <p>
-                    {extensionMode
-                      ? extensionError
-                        ? "Fix workbook resolution above to start chatting."
-                        : "Waiting for workbook context from Tableau…"
-                      : "Choose a workbook above to unlock sheet exploration and data questions."}
+                    {workbookError
+                      ? "Could not resolve workbook ID for this dashboard."
+                      : "Detecting workbook ID from Tableau…"}
                   </p>
                 </div>
               ) : starters.length > 0 ? (
@@ -538,9 +339,7 @@ export function App() {
                           type="button"
                           className="starter-card"
                           onClick={() => void sendMessage(q)}
-                          disabled={
-                            !health?.ok || (isWorkbookMode && !selectedWorkbook) || extensionLoading
-                          }
+                          disabled={!health?.ok || !selectedWorkbook || workbookLoading}
                           style={{ animationDelay: `${i * 60}ms` }}
                         >
                           <span className="starter-card-icon" aria-hidden="true">
@@ -610,18 +409,14 @@ export function App() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKeyDown}
               placeholder={
-                health?.chatMode === "datasource"
-                  ? "Ask about a published datasource…"
-                  : extensionLoading
-                    ? "Resolving workbook…"
-                    : selectedWorkbook
-                      ? `Ask about ${displayName(selectedWorkbook.name)}…`
-                      : extensionMode
-                        ? "Waiting for workbook context…"
-                        : "Select a workbook, then ask a question…"
+                workbookLoading
+                  ? "Resolving workbook ID…"
+                  : selectedWorkbook
+                    ? `Ask about ${displayName(selectedWorkbook.name)}…`
+                    : "Waiting for workbook ID…"
               }
               rows={1}
-              disabled={loading || extensionLoading}
+              disabled={loading || workbookLoading}
               aria-label="Message"
             />
             <button

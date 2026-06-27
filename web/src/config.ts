@@ -13,10 +13,18 @@ export function apiUrl(path: string): string {
   return base ? `${base}${p}` : p;
 }
 
-/** True when loaded as a Tableau dashboard extension (or ?extension=1 for local testing). */
-export function isExtensionContext(): boolean {
+function isInIframe(): boolean {
   if (typeof window === "undefined") return false;
-  const params = new URLSearchParams(window.location.search);
-  if (params.get("extension") === "1") return true;
-  return Boolean(window.tableau?.extensions);
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+}
+
+/** True when running inside Tableau (iframe or Extensions API). */
+export function isTableauHost(): boolean {
+  if (typeof window === "undefined") return false;
+  if (window.tableau?.extensions) return true;
+  return isInIframe();
 }

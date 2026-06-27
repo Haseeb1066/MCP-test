@@ -5,11 +5,19 @@ interface TableauDashboard {
   readonly worksheets: ReadonlyArray<{ readonly name: string }>;
 }
 
+interface TableauSettings {
+  get(key: string): string | undefined;
+  set(key: string, value: string): void;
+  initializeAsync(): Promise<void>;
+  saveAsync(): Promise<void>;
+}
+
 interface TableauExtensionsApi {
   initializeAsync(): Promise<void>;
   readonly dashboardContent: {
     readonly dashboard: TableauDashboard;
   };
+  readonly settings: TableauSettings;
 }
 
 interface TableauGlobal {
