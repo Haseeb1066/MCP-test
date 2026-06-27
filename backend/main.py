@@ -142,8 +142,7 @@ async def api_resolve_workbook(
                 status_code=404,
                 detail=(
                     f"No workbook matched workbookId={id!r} name={name!r} projectName={projectName!r} "
-                    f"contentUrl={contentUrl!r}. "
-                    "From the dropdown, copy the workbook id or use contentUrl=Sales for Sales · Sales."
+                    f"contentUrl={contentUrl!r}."
                 ),
             )
         return {"workbook": workbook}
