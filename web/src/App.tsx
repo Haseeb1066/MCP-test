@@ -19,13 +19,6 @@ interface ChatMessage {
   timing?: TurnTiming;
 }
 
-const CAPABILITIES = [
-  { icon: "📊", label: "Sheet data", desc: "Pull view data via MCP" },
-  { icon: "🔍", label: "Explore views", desc: "List sheets & dashboards" },
-  { icon: "💬", label: "Natural language", desc: "Ask in plain English" },
-  { icon: "⚡", label: "Live tools", desc: "Transparent MCP steps" },
-] as const;
-
 function displayName(value: string): string {
   return value.trim() || value;
 }
@@ -33,16 +26,6 @@ function displayName(value: string): string {
 function workbookLabel(w: WorkbookSummary): string {
   const name = displayName(w.name);
   return w.projectName ? `${name} · ${w.projectName}` : name;
-}
-
-function workbookStarters(name: string): string[] {
-  const n = displayName(name);
-  return [
-    `List all sheets in ${n}`,
-    `Show data from the default or Summary sheet in ${n}`,
-    `What views are in ${n}?`,
-    `Give me a short overview of ${n}`,
-  ];
 }
 
 function BrandMark() {
@@ -226,7 +209,6 @@ export function App() {
     }
   };
 
-  const starters = selectedWorkbook ? workbookStarters(selectedWorkbook.name) : [];
   const workbookReady = !isWorkbookMode || !!selectedWorkbook;
   const canSend = !loading && !!input.trim() && health?.ok && workbookReady && !workbookLoading;
 
@@ -274,7 +256,7 @@ export function App() {
           </div>
 
           <p className="header-subtitle">
-            Ask questions about this workbook — workbook ID is detected from the dashboard.
+            Ask questions about this dashboard.
           </p>
 
           {isWorkbookMode && health?.ok && (
@@ -319,64 +301,20 @@ export function App() {
         </header>
 
         <main className="messages" role="log" aria-live="polite" aria-relevant="additions">
-          {messages.length === 0 && !loading && (
-            <div className="empty-state">
-              {isWorkbookMode && !selectedWorkbook && health?.ok && !workbookLoading ? (
-                <div className="empty-state-card">
-                  <div className="empty-state-icon">📂</div>
-                  <h2>Workbook not ready</h2>
-                  <p>
-                    {workbookError
-                      ? "Could not resolve workbook ID for this dashboard."
-                      : "Detecting workbook ID from Tableau…"}
-                  </p>
-                </div>
-              ) : starters.length > 0 ? (
-                <>
-                  <div className="empty-state-hero">
-                    <h2>What would you like to know?</h2>
-                    <p>
-                      Ask about sheets, views, or metrics
-                      {selectedWorkbook ? ` in ${displayName(selectedWorkbook.name)}` : ""}.
-                    </p>
-                  </div>
-                  <div className="capability-grid">
-                    {CAPABILITIES.map((c) => (
-                      <div key={c.label} className="capability-card">
-                        <span className="capability-icon" aria-hidden="true">
-                          {c.icon}
-                        </span>
-                        <div>
-                          <div className="capability-label">{c.label}</div>
-                          <div className="capability-desc">{c.desc}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="starters">
-                    <p className="starters-title">Suggested questions</p>
-                    <div className="starter-grid">
-                      {starters.map((q, i) => (
-                        <button
-                          key={q}
-                          type="button"
-                          className="starter-card"
-                          onClick={() => void sendMessage(q)}
-                          disabled={!health?.ok || !selectedWorkbook || workbookLoading}
-                          style={{ animationDelay: `${i * 60}ms` }}
-                        >
-                          <span className="starter-card-icon" aria-hidden="true">
-                            →
-                          </span>
-                          {q}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              ) : null}
-            </div>
-          )}
+          {messages.length === 0 &&
+            !loading &&
+            isWorkbookMode &&
+            !selectedWorkbook &&
+            health?.ok &&
+            !workbookLoading && (
+              <div className="empty-state-card">
+                <p>
+                  {workbookError
+                    ? "Could not resolve workbook ID for this dashboard."
+                    : "Detecting workbook ID from Tableau…"}
+                </p>
+              </div>
+            )}
 
           {messages.map((m, i) => (
             <div
