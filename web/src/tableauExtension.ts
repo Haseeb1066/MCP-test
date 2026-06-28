@@ -13,10 +13,11 @@ export type ExtensionContext = {
   workbook: WorkbookSummary;
   dashboardName: string;
   worksheetNames: string[];
-  source: "settings" | "query" | "tableau-name";
+  source: "settings" | "query" | "tableau-name" | "tableau-contentUrl";
 };
 
 const SETTINGS_WORKBOOK_ID = "workbookId";
+const SETTINGS_WORKBOOK_NAME = "workbookName";
 
 function sanitizeParam(value: string | null): string | null {
   if (!value) return null;
@@ -58,6 +59,38 @@ async function resolveWorkbook(options: {
   return data.workbook;
 }
 
+/** Guess Tableau contentUrl slugs from the display name shown in the dashboard. */
+function contentUrlCandidatesFromName(name: string): string[] {
+  const trimmed = name.trim();
+  if (!trimmed) return [];
+  const candidates = [
+    trimmed.replace(/[()]/g, "").replace(/\s+/g, ""),
+    trimmed.replace(/\s+/g, ""),
+    trimmed.replace(/[^a-zA-Z0-9]/g, ""),
+  ];
+  return [...new Set(candidates.filter((c) => c.length > 0))];
+}
+
+async function resolveFromTableauWorkbook(
+  workbookName: string,
+  projectName?: string
+): Promise<{ workbook: WorkbookSummary; source: "tableau-name" | "tableau-contentUrl" }> {
+  try {
+    const workbook = await resolveWorkbook({ name: workbookName, projectName });
+    return { workbook, source: "tableau-name" };
+  } catch (nameErr) {
+    for (const contentUrl of contentUrlCandidatesFromName(workbookName)) {
+      try {
+        const workbook = await resolveWorkbook({ contentUrl });
+        return { workbook, source: "tableau-contentUrl" };
+      } catch {
+        /* try next slug candidate */
+      }
+    }
+    throw nameErr instanceof Error ? nameErr : new Error(String(nameErr));
+  }
+}
+
 async function waitForTableauApi(timeoutMs = 30_000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -67,11 +100,27 @@ async function waitForTableauApi(timeoutMs = 30_000) {
   return null;
 }
 
-async function persistWorkbookId(settings: TableauSettings, workbookId: string): Promise<void> {
-  const current = settings.get(SETTINGS_WORKBOOK_ID);
-  if (current === workbookId) return;
-  settings.set(SETTINGS_WORKBOOK_ID, workbookId);
+async function persistWorkbookContext(
+  settings: TableauSettings,
+  workbook: WorkbookSummary,
+  tableauWorkbookName: string
+): Promise<void> {
+  settings.set(SETTINGS_WORKBOOK_ID, workbook.id);
+  settings.set(SETTINGS_WORKBOOK_NAME, tableauWorkbookName);
   await settings.saveAsync();
+}
+
+function extensionContextFromDashboard(
+  dashboard: TableauDashboard,
+  workbook: WorkbookSummary,
+  source: ExtensionContext["source"]
+): ExtensionContext {
+  return {
+    workbook,
+    dashboardName: dashboard.name,
+    worksheetNames: dashboard.worksheets.map((w) => w.name),
+    source,
+  };
 }
 
 async function loadFromTableauHost(test: ReturnType<typeof testParamsFromQuery>): Promise<ExtensionContext> {
@@ -79,6 +128,10 @@ async function loadFromTableauHost(test: ReturnType<typeof testParamsFromQuery>)
   if (!api) {
     if (test.workbookId) {
       const workbook = await resolveWorkbook({ workbookId: test.workbookId });
+      return { workbook, dashboardName: "Dashboard", worksheetNames: [], source: "query" };
+    }
+    if (test.contentUrl) {
+      const workbook = await resolveWorkbook({ contentUrl: test.contentUrl });
       return { workbook, dashboardName: "Dashboard", worksheetNames: [], source: "query" };
     }
     throw new Error(
@@ -90,57 +143,40 @@ async function loadFromTableauHost(test: ReturnType<typeof testParamsFromQuery>)
   await api.settings.initializeAsync();
   const dashboard = api.dashboardContent.dashboard;
   const settings = api.settings;
+  const tableauWorkbookName = dashboard.workbook.name;
+
+  if (test.workbookId) {
+    const workbook = await resolveWorkbook({ workbookId: test.workbookId });
+    await persistWorkbookContext(settings, workbook, tableauWorkbookName);
+    return extensionContextFromDashboard(dashboard, workbook, "query");
+  }
+
+  if (test.contentUrl) {
+    const workbook = await resolveWorkbook({ contentUrl: test.contentUrl });
+    await persistWorkbookContext(settings, workbook, tableauWorkbookName);
+    return extensionContextFromDashboard(dashboard, workbook, "query");
+  }
 
   const storedId = sanitizeParam(settings.get(SETTINGS_WORKBOOK_ID) ?? null);
-  if (storedId) {
+  const storedName = sanitizeParam(settings.get(SETTINGS_WORKBOOK_NAME) ?? null);
+
+  // Re-use cached id only when still on the same workbook (moving extension to another dashboard re-resolves).
+  if (storedId && storedName && storedName === tableauWorkbookName) {
     try {
       const workbook = await resolveWorkbook({ workbookId: storedId });
-      return {
-        workbook,
-        dashboardName: dashboard.name,
-        worksheetNames: dashboard.worksheets.map((w) => w.name),
-        source: "settings",
-      };
+      return extensionContextFromDashboard(dashboard, workbook, "settings");
     } catch {
       /* stored id stale — resolve again from Tableau context */
     }
   }
 
-  if (test.workbookId) {
-    const workbook = await resolveWorkbook({ workbookId: test.workbookId });
-    await persistWorkbookId(settings, workbook.id);
-    return {
-      workbook,
-      dashboardName: dashboard.name,
-      worksheetNames: dashboard.worksheets.map((w) => w.name),
-      source: "query",
-    };
-  }
+  const { workbook, source } = await resolveFromTableauWorkbook(
+    tableauWorkbookName,
+    test.projectName ?? undefined
+  );
+  await persistWorkbookContext(settings, workbook, tableauWorkbookName);
 
-  if (test.contentUrl) {
-    const workbook = await resolveWorkbook({ contentUrl: test.contentUrl });
-    await persistWorkbookId(settings, workbook.id);
-    return {
-      workbook,
-      dashboardName: dashboard.name,
-      worksheetNames: dashboard.worksheets.map((w) => w.name),
-      source: "query",
-    };
-  }
-
-  const workbookName = dashboard.workbook.name;
-  const workbook = await resolveWorkbook({
-    name: workbookName,
-    projectName: test.projectName ?? undefined,
-  });
-  await persistWorkbookId(settings, workbook.id);
-
-  return {
-    workbook,
-    dashboardName: dashboard.name,
-    worksheetNames: dashboard.worksheets.map((w) => w.name),
-    source: "tableau-name",
-  };
+  return extensionContextFromDashboard(dashboard, workbook, source);
 }
 
 async function loadFromLocalTest(test: ReturnType<typeof testParamsFromQuery>): Promise<ExtensionContext> {
@@ -153,20 +189,20 @@ async function loadFromLocalTest(test: ReturnType<typeof testParamsFromQuery>): 
     return { workbook, dashboardName: "Test dashboard", worksheetNames: [], source: "query" };
   }
   if (test.workbookName) {
-    const workbook = await resolveWorkbook({
-      name: test.workbookName,
-      projectName: test.projectName ?? undefined,
-    });
-    return { workbook, dashboardName: "Test dashboard", worksheetNames: [], source: "tableau-name" };
+    const { workbook, source } = await resolveFromTableauWorkbook(
+      test.workbookName,
+      test.projectName ?? undefined
+    );
+    return { workbook, dashboardName: "Test dashboard", worksheetNames: [], source };
   }
   throw new Error(
-    "Open this app from a Tableau dashboard extension, or add ?workbookId=YOUR-LUID for local testing."
+    "Open this app from a Tableau dashboard extension, or add ?workbookId= or ?contentUrl= for local testing."
   );
 }
 
 /**
  * Resolve the current dashboard workbook to MCP workbookId (LUID).
- * In Tableau: uses saved extension settings first, then auto-resolves and stores the id.
+ * In Tableau: reads workbook from the dashboard, resolves via name/contentUrl, caches per workbook.
  */
 export async function loadExtensionContext(): Promise<ExtensionContext> {
   const test = testParamsFromQuery();
