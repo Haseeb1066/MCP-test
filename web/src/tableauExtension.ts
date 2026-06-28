@@ -58,7 +58,7 @@ async function resolveWorkbook(options: {
   return data.workbook;
 }
 
-async function waitForTableauApi(timeoutMs = 20_000) {
+async function waitForTableauApi(timeoutMs = 30_000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (window.tableau?.extensions) return window.tableau.extensions;
