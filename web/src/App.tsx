@@ -7,8 +7,7 @@ import {
   type WorkbookSummary,
 } from "./tableauExtension";
 import { ToolSteps, type ToolStep, type TurnTiming } from "./ToolSteps";
-import { APP_BUILD_ID, debugLog } from "./debugLog";
-import { isTableauHost } from "./config";
+import { APP_BUILD_ID } from "./debugLog";
 
 type Role = "user" | "assistant";
 
@@ -66,16 +65,6 @@ export function App() {
   const selectedWorkbook = extensionContext?.workbook ?? null;
 
   useEffect(() => {
-    // #region agent log
-    debugLog("App.tsx:mount", "Extension app mounted", {
-      buildId: APP_BUILD_ID,
-      hasDropdownUi: false,
-      isTableauHost: isTableauHost(),
-    }, "B");
-    // #endregion
-  }, []);
-
-  useEffect(() => {
     fetch(apiUrl("/api/health"))
       .then(async (r) => {
         try {
@@ -95,11 +84,6 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!health?.ok || !isWorkbookMode) {
-      if (!isWorkbookMode) setWorkbookLoading(false);
-      return;
-    }
-
     let cancelled = false;
     setWorkbookLoading(true);
     setWorkbookError(null);
@@ -107,24 +91,13 @@ export function App() {
     loadExtensionContext()
       .then((ctx) => {
         if (!cancelled) {
-          // #region agent log
-          debugLog("App.tsx:workbook", "Workbook resolved", {
-            workbookId: ctx.workbook.id,
-            source: ctx.source,
-            dashboard: ctx.dashboardName,
-          }, "C");
-          // #endregion
           setExtensionContext(ctx);
           setWorkbookError(null);
         }
       })
       .catch((e) => {
         if (!cancelled) {
-          const msg = e instanceof Error ? e.message : String(e);
-          // #region agent log
-          debugLog("App.tsx:workbook-error", "Workbook resolve failed", { error: msg }, "D");
-          // #endregion
-          setWorkbookError(msg);
+          setWorkbookError(e instanceof Error ? e.message : String(e));
           setExtensionContext(null);
         }
       })
@@ -135,7 +108,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [health?.ok, isWorkbookMode]);
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
