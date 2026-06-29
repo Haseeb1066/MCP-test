@@ -171,6 +171,13 @@ body {
   max-width: 52ch;
 }
 
+.header-error {
+  margin: 0.5rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--error);
+  line-height: 1.4;
+}
+
 /* ── Status pill ── */
 
 .status-pill {

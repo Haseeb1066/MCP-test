@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest manifest-version="0.1" xmlns="http://www.tableau.com/xml/extension_manifest">
-  <dashboard-extension id="com.tableau-mcp.chat" extension-version="0.2.7">
+  <dashboard-extension id="com.nunomics.ai" extension-version="0.2.8">
     <default-locale>en_US</default-locale>
     <name resource-id="name"/>
     <description resource-id="description"/>
-    <author name="Tableau MCP Chat" email="" website="https://example.com"/>
+    <author name="Nunomics" email="" website="https://nunomics.ai"/>
     <min-api-version>1.0</min-api-version>
     <source-location>
       <url>https://mcp-test-ldxl.onrender.com</url>
@@ -13,10 +13,10 @@
   </dashboard-extension>
   <resources>
     <resource id="name">
-      <text locale="en_US">Tableau MCP Chat</text>
+      <text locale="en_US">Nunomics-ai</text>
     </resource>
     <resource id="description">
-      <text locale="en_US">Ask questions about this workbook using Tableau MCP and OpenAI.</text>
+      <text locale="en_US">Ask questions about this dashboard with AI.</text>
     </resource>
   </resources>
 </manifest>

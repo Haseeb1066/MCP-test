@@ -6,8 +6,7 @@ import {
   type ExtensionContext,
   type WorkbookSummary,
 } from "./tableauExtension";
-import { ToolSteps, type ToolStep, type TurnTiming } from "./ToolSteps";
-import { APP_BUILD_ID } from "./debugLog";
+import type { ToolStep, TurnTiming } from "./ToolSteps";
 
 type Role = "user" | "assistant";
 
@@ -16,15 +15,6 @@ interface ChatMessage {
   content: string;
   steps?: ToolStep[];
   timing?: TurnTiming;
-}
-
-function displayName(value: string): string {
-  return value.trim() || value;
-}
-
-function workbookLabel(w: WorkbookSummary): string {
-  const name = displayName(w.name);
-  return w.projectName ? `${name} · ${w.projectName}` : name;
 }
 
 function BrandMark() {
@@ -119,7 +109,7 @@ export function App() {
       const trimmed = text.trim();
       if (!trimmed || loading) return;
       if (isWorkbookMode && !selectedWorkbook) {
-        setError("Waiting for workbook ID from this dashboard…");
+        setError("Connecting…");
         return;
       }
 
@@ -188,14 +178,15 @@ export function App() {
   const statusMessage = (() => {
     if (health === null) return "Checking connection…";
     if (health.healthError) return health.healthError;
-    if (workbookLoading) return "Resolving workbook ID…";
+    if (workbookLoading) return "Connecting…";
+    if (workbookError) return workbookError;
     if (!health.ok) {
       if (health.tableauSignInOk === false && health.tableauHint) return health.tableauHint;
       if (!health.hasOpenAi) return "Set OPENAI_API_KEY on the server";
       return "Set Tableau PAT on the server";
     }
     if (selectedWorkbook) {
-      return `Connected · ${displayName(selectedWorkbook.name)}`;
+      return "Connected";
     }
     return "Connected";
   })();
@@ -215,8 +206,7 @@ export function App() {
             <div className="brand">
               <BrandMark />
               <div className="brand-text">
-                <h1>Tableau MCP</h1>
-                <p className="brand-tagline">Dashboard Extension</p>
+                <h1>Nunomics-ai</h1>
               </div>
             </div>
             <div className="header-actions">
@@ -227,45 +217,6 @@ export function App() {
               )}
             </div>
           </div>
-
-          <p className="header-subtitle">
-            Ask questions about this dashboard.
-          </p>
-
-          {isWorkbookMode && health?.ok && (
-            <div className="workbook-card workbook-card--extension">
-              {workbookLoading ? (
-                <div className="workbook-card-loading">
-                  <span className="spinner" />
-                  Resolving workbook ID from this dashboard…
-                </div>
-              ) : workbookError ? (
-                <p className="workbook-card-error" role="alert">
-                  {workbookError}
-                </p>
-              ) : selectedWorkbook ? (
-                <div className="workbook-card-body">
-                  <span className="workbook-card-icon" aria-hidden="true">
-                    📁
-                  </span>
-                  <div>
-                    <div className="workbook-card-title">{workbookLabel(selectedWorkbook)}</div>
-                    <div className="workbook-card-meta">
-                      Workbook ID · {selectedWorkbook.id}
-                      {extensionContext?.source === "settings" ? " · saved in extension" : ""}
-                    </div>
-                    {extensionContext?.dashboardName && (
-                      <div className="workbook-card-meta">
-                        Dashboard · {extensionContext.dashboardName}
-                        {extensionContext.worksheetNames.length > 0 &&
-                          ` · ${extensionContext.worksheetNames.length} sheet${extensionContext.worksheetNames.length === 1 ? "" : "s"}`}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          )}
 
           <div className={`status-pill ${statusClass}`}>
             <span className="status-dot" />
@@ -281,11 +232,7 @@ export function App() {
             health?.ok &&
             !workbookLoading && (
               <div className="empty-state-card">
-                <p>
-                  {workbookError
-                    ? "Could not resolve workbook ID for this dashboard."
-                    : "Detecting workbook ID from Tableau…"}
-                </p>
+                <p>{workbookError ? "Could not connect to this dashboard." : "Connecting…"}</p>
               </div>
             )}
 
@@ -299,9 +246,6 @@ export function App() {
                 {m.role === "user" ? "You" : "AI"}
               </div>
               <div className="msg-content">
-                {m.role === "assistant" && m.steps && m.steps.length > 0 && (
-                  <ToolSteps steps={m.steps} timing={m.timing} />
-                )}
                 <div
                   className={`msg msg--${m.role}${error && i === messages.length - 1 && m.role === "assistant" ? " msg--error" : ""}`}
                 >
@@ -322,7 +266,7 @@ export function App() {
                   <span />
                   <span />
                 </span>
-                Running Tableau MCP tools…
+                Thinking…
               </div>
             </div>
           )}
@@ -344,10 +288,12 @@ export function App() {
               onKeyDown={onKeyDown}
               placeholder={
                 workbookLoading
-                  ? "Resolving workbook ID…"
-                  : selectedWorkbook
-                    ? `Ask about ${displayName(selectedWorkbook.name)}…`
-                    : "Waiting for workbook ID…"
+                  ? "Connecting…"
+                  : !health?.ok
+                    ? "Connecting…"
+                    : !selectedWorkbook
+                      ? "Connecting…"
+                      : "Ask a question…"
               }
               rows={1}
               disabled={loading || workbookLoading}
@@ -373,10 +319,6 @@ export function App() {
           </div>
           <p className="composer-hint">
             <kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for new line
-            <span className="build-stamp" title="UI build identifier">
-              {" "}
-              · build {APP_BUILD_ID}
-            </span>
           </p>
         </footer>
       </div>
