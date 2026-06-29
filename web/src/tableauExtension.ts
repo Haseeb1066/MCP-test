@@ -23,6 +23,7 @@ export type ExtensionContext = {
 
 const SETTINGS_WORKBOOK_ID = "workbookId";
 const SETTINGS_WORKBOOK_NAME = "workbookName";
+const SETTINGS_CONTENT_URL = "contentUrl";
 
 function sanitizeParam(value: string | null): string | null {
   if (!value) return null;
@@ -64,12 +65,22 @@ async function resolveWorkbook(options: {
   return data.workbook;
 }
 
-/** Extract workbook contentUrl from Tableau dashboard URLs (e.g. .../views/AccountsPayableAI-MCP/ExecutiveSummary). */
+/**
+ * Extract workbook contentUrl slug from Tableau dashboard URLs.
+ * e.g. .../views/AccountsPayableAI-MCP/ExecutiveSummary
+ */
 export function parseContentUrlFromTableauUrl(url: string): string | null {
   try {
     const decoded = decodeURIComponent(url);
-    const viewsMatch = decoded.match(/\/views\/([^/?#:]+)(?:\/|[?#:]|$)/i);
-    if (viewsMatch?.[1]) return viewsMatch[1];
+    const patterns = [
+      /\/views\/([^/?#:]+)(?:\/|[?#:]|$)/i,
+      /#\/[^/]+\/[^/]+\/views\/([^/?#:]+)(?:\/|[?#:]|$)/i,
+      /[?&]contentUrl=([^&]+)/i,
+    ];
+    for (const pattern of patterns) {
+      const match = decoded.match(pattern);
+      if (match?.[1]) return match[1];
+    }
   } catch {
     /* ignore malformed URLs */
   }
@@ -90,7 +101,7 @@ function getDashboardUrlHints(): string[] {
     }
   }
 
-  return hints;
+  return [...new Set(hints)];
 }
 
 function parseContentUrlFromDashboardHints(): string | null {
@@ -101,15 +112,61 @@ function parseContentUrlFromDashboardHints(): string | null {
   return null;
 }
 
-/** Poll briefly — referrer can appear slightly after iframe load on some Tableau hosts. */
-async function waitForContentUrlHint(timeoutMs = 2_500): Promise<string | null> {
+/** Poll — dashboard URL / referrer may appear shortly after iframe load. */
+async function waitForContentUrlHint(timeoutMs = 5_000): Promise<string | null> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const contentUrl = parseContentUrlFromDashboardHints();
     if (contentUrl) return contentUrl;
-    await new Promise((r) => setTimeout(r, 80));
+    await new Promise((r) => setTimeout(r, 100));
   }
   return null;
+}
+
+async function detectDashboardContentUrl(
+  test: ReturnType<typeof testParamsFromQuery>
+): Promise<string | null> {
+  if (test.contentUrl) return test.contentUrl;
+  return parseContentUrlFromDashboardHints() || (await waitForContentUrlHint());
+}
+
+function sessionWorkbookKey(contentUrl: string): string {
+  return `mcp-workbook:${contentUrl}`;
+}
+
+function readSessionWorkbookId(contentUrl: string): string | null {
+  try {
+    return sessionStorage.getItem(sessionWorkbookKey(contentUrl));
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionWorkbookId(contentUrl: string, workbookId: string): void {
+  try {
+    sessionStorage.setItem(sessionWorkbookKey(contentUrl), workbookId);
+  } catch {
+    /* ignore */
+  }
+}
+
+async function resolveByContentUrl(
+  contentUrl: string,
+  source: "query" | "referrer-contentUrl"
+): Promise<ExtensionContext> {
+  const cachedId = readSessionWorkbookId(contentUrl);
+  if (cachedId) {
+    try {
+      const workbook = await resolveWorkbook({ workbookId: cachedId });
+      return extensionContextWithoutApi(workbook, contentUrl, source);
+    } catch {
+      /* stale session cache */
+    }
+  }
+
+  const workbook = await resolveWorkbook({ contentUrl });
+  writeSessionWorkbookId(contentUrl, workbook.id);
+  return extensionContextWithoutApi(workbook, contentUrl, source);
 }
 
 function contentUrlCandidatesFromName(name: string): string[] {
@@ -136,23 +193,14 @@ async function resolveFromTableauWorkbook(
         const workbook = await resolveWorkbook({ contentUrl });
         return { workbook, source: "tableau-contentUrl" };
       } catch {
-        /* try next slug candidate */
+        /* try next slug */
       }
     }
     throw nameErr instanceof Error ? nameErr : new Error(String(nameErr));
   }
 }
 
-async function resolveFromReferrerHint(): Promise<ExtensionContext> {
-  const contentUrl = await waitForContentUrlHint();
-  if (!contentUrl) {
-    throw new Error("No workbook slug in dashboard URL");
-  }
-  const workbook = await resolveWorkbook({ contentUrl });
-  return extensionContextWithoutApi(workbook, contentUrl, "referrer-contentUrl");
-}
-
-async function waitForTableauApi(timeoutMs = 15_000) {
+async function waitForTableauApi(timeoutMs = 12_000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (window.tableau?.extensions) return window.tableau.extensions;
@@ -164,11 +212,14 @@ async function waitForTableauApi(timeoutMs = 15_000) {
 async function persistWorkbookContext(
   settings: TableauSettings,
   workbook: WorkbookSummary,
-  tableauWorkbookName: string
+  tableauWorkbookName: string,
+  contentUrl?: string
 ): Promise<void> {
   settings.set(SETTINGS_WORKBOOK_ID, workbook.id);
   settings.set(SETTINGS_WORKBOOK_NAME, tableauWorkbookName);
+  if (contentUrl) settings.set(SETTINGS_CONTENT_URL, contentUrl);
   await settings.saveAsync();
+  if (contentUrl) writeSessionWorkbookId(contentUrl, workbook.id);
 }
 
 function extensionContextFromDashboard(
@@ -197,6 +248,17 @@ function extensionContextWithoutApi(
   };
 }
 
+/** Dynamic path: read workbook slug from dashboard URL (parallel with Tableau API). */
+async function loadFromDashboardUrl(
+  test: ReturnType<typeof testParamsFromQuery>
+): Promise<ExtensionContext> {
+  const contentUrl = await detectDashboardContentUrl(test);
+  if (!contentUrl) {
+    throw new Error("No workbook slug in dashboard URL");
+  }
+  return resolveByContentUrl(contentUrl, test.contentUrl ? "query" : "referrer-contentUrl");
+}
+
 async function loadFromTableauApi(
   test: ReturnType<typeof testParamsFromQuery>
 ): Promise<ExtensionContext> {
@@ -210,11 +272,17 @@ async function loadFromTableauApi(
   const dashboard = api.dashboardContent.dashboard;
   const settings = api.settings;
   const tableauWorkbookName = dashboard.workbook.name;
+  const detectedContentUrl = parseContentUrlFromDashboardHints();
 
   const storedId = sanitizeParam(settings.get(SETTINGS_WORKBOOK_ID) ?? null);
   const storedName = sanitizeParam(settings.get(SETTINGS_WORKBOOK_NAME) ?? null);
+  const storedContentUrl = sanitizeParam(settings.get(SETTINGS_CONTENT_URL) ?? null);
 
-  if (storedId && storedName && storedName === tableauWorkbookName) {
+  const cacheKeyMatches =
+    (detectedContentUrl && storedContentUrl === detectedContentUrl) ||
+    (storedName && storedName === tableauWorkbookName);
+
+  if (storedId && cacheKeyMatches) {
     try {
       const workbook = await resolveWorkbook({ workbookId: storedId });
       return extensionContextFromDashboard(dashboard, workbook, "settings");
@@ -223,22 +291,27 @@ async function loadFromTableauApi(
     }
   }
 
-  try {
-    const { workbook, source } = await resolveFromTableauWorkbook(
-      tableauWorkbookName,
-      test.projectName ?? undefined
-    );
-    await persistWorkbookContext(settings, workbook, tableauWorkbookName);
-    return extensionContextFromDashboard(dashboard, workbook, source);
-  } catch {
-    const contentUrl = parseContentUrlFromDashboardHints();
-    if (contentUrl) {
-      const workbook = await resolveWorkbook({ contentUrl });
-      await persistWorkbookContext(settings, workbook, tableauWorkbookName || contentUrl);
+  if (detectedContentUrl) {
+    try {
+      const workbook = await resolveWorkbook({ contentUrl: detectedContentUrl });
+      await persistWorkbookContext(settings, workbook, tableauWorkbookName, detectedContentUrl);
       return extensionContextFromDashboard(dashboard, workbook, "referrer-contentUrl");
+    } catch {
+      /* try name resolve */
     }
-    throw new Error(`Could not resolve workbook "${tableauWorkbookName}"`);
   }
+
+  const { workbook, source } = await resolveFromTableauWorkbook(
+    tableauWorkbookName,
+    test.projectName ?? undefined
+  );
+  await persistWorkbookContext(
+    settings,
+    workbook,
+    tableauWorkbookName,
+    workbook.contentUrl ?? detectedContentUrl ?? undefined
+  );
+  return extensionContextFromDashboard(dashboard, workbook, source);
 }
 
 async function loadFromTableauHost(test: ReturnType<typeof testParamsFromQuery>): Promise<ExtensionContext> {
@@ -248,22 +321,20 @@ async function loadFromTableauHost(test: ReturnType<typeof testParamsFromQuery>)
   }
 
   if (test.contentUrl) {
-    const workbook = await resolveWorkbook({ contentUrl: test.contentUrl });
-    return extensionContextWithoutApi(workbook, test.contentUrl, "query");
+    return resolveByContentUrl(test.contentUrl, "query");
   }
 
-  // Resolve immediately: dashboard URL (fast) and Tableau API (rich) run in parallel.
-  const strategies: Promise<ExtensionContext>[] = [loadFromTableauApi(test)];
-
-  if (parseContentUrlFromDashboardHints() || document.referrer || isTableauHost()) {
-    strategies.push(resolveFromReferrerHint());
-  }
+  // Dynamic: dashboard URL slug and Tableau API run in parallel — first success wins.
+  const strategies: Promise<ExtensionContext>[] = [
+    loadFromDashboardUrl(test),
+    loadFromTableauApi(test),
+  ];
 
   try {
     return await Promise.any(strategies);
   } catch {
     throw new Error(
-      "Could not detect workbook for this dashboard. Allowlist https://mcp-test-ldxl.onrender.com on Tableau Server, then reload."
+      "Could not detect workbook for this dashboard. Allowlist https://mcp-test-ldxl.onrender.com on Tableau Server (site demo), then reload."
     );
   }
 }
@@ -274,8 +345,7 @@ async function loadFromLocalTest(test: ReturnType<typeof testParamsFromQuery>): 
     return { workbook, dashboardName: "Test dashboard", worksheetNames: [], source: "query" };
   }
   if (test.contentUrl) {
-    const workbook = await resolveWorkbook({ contentUrl: test.contentUrl });
-    return { workbook, dashboardName: "Test dashboard", worksheetNames: [], source: "query" };
+    return resolveByContentUrl(test.contentUrl, "query");
   }
   if (test.workbookName) {
     const { workbook, source } = await resolveFromTableauWorkbook(
@@ -285,24 +355,19 @@ async function loadFromLocalTest(test: ReturnType<typeof testParamsFromQuery>): 
     return { workbook, dashboardName: "Test dashboard", worksheetNames: [], source };
   }
 
-  const contentUrl = parseContentUrlFromDashboardHints();
+  const contentUrl = await detectDashboardContentUrl(test);
   if (contentUrl) {
-    const workbook = await resolveWorkbook({ contentUrl });
-    return {
-      workbook,
-      dashboardName: contentUrl,
-      worksheetNames: [],
-      source: "referrer-contentUrl",
-    };
+    return resolveByContentUrl(contentUrl, "referrer-contentUrl");
   }
 
   throw new Error(
-    "Open this app from a Tableau dashboard extension, or add ?workbookId= or ?contentUrl= for local testing."
+    "Open from a Tableau dashboard extension, or add ?contentUrl=WorkbookSlug for testing."
   );
 }
 
 /**
- * Resolve the current dashboard workbook to MCP workbookId (LUID) as soon as the extension loads.
+ * Dynamically resolve workbook ID on extension start.
+ * .trex URL must be plain (no query params) — slug is read from each dashboard URL.
  */
 export async function loadExtensionContext(): Promise<ExtensionContext> {
   const test = testParamsFromQuery();

@@ -4,10 +4,13 @@ This folder contains the **Tableau dashboard extension** manifest for MCP Chat.
 
 ## How it works
 
-1. Tableau loads your built UI in an iframe (from `source-location` in the `.trex` file).
-2. The extension calls the Tableau Extensions API to read the **current workbook name**.
-3. The UI calls `GET /api/workbooks/resolve?name=...` to map that name to the MCP **workbook LUID**.
-4. Chat requests include `selectedWorkbook` and `extensionMode: true` — no dropdown needed.
+1. Tableau loads your UI in an iframe from the plain URL in `.trex` (no query params).
+2. On start, the app reads the workbook slug from the **dashboard URL** (same as `?contentUrl=...` in browser tests), e.g. `.../views/AccountsPayableAI-MCP/ExecutiveSummary` → `AccountsPayableAI-MCP`.
+3. It calls `GET /api/workbooks/resolve?contentUrl=...` to get the workbook **LUID**.
+4. If the Tableau Extensions API is available, it can also resolve by workbook name and cache the id per dashboard.
+5. Chat requests include `selectedWorkbook` and `extensionMode: true`.
+
+**Do not** put `?contentUrl=OneWorkbook` in `.trex` — that hardcodes a single workbook. Use a plain URL; each dashboard is detected automatically.
 
 ## Setup
 
@@ -45,10 +48,10 @@ VITE_API_BASE=https://api.example.com npm run build
 With the dev server running:
 
 ```
-http://localhost:5173/?extension=1&workbookName=Your+Workbook+Name
+http://localhost:5173/?contentUrl=AccountsPayableAI-MCP
 ```
 
-Uses the same resolve flow as the real extension (workbook name must match Tableau).
+Same resolve path the extension uses on start (slug from dashboard URL).
 
 ## Troubleshooting
 
